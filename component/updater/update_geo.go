@@ -11,6 +11,7 @@ import (
 	"github.com/metacubex/mihomo/common/atomic"
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/geodata"
+	_ "github.com/metacubex/mihomo/component/geodata/standard"
 	"github.com/metacubex/mihomo/component/mmdb"
 	"github.com/metacubex/mihomo/component/resource"
 	C "github.com/metacubex/mihomo/constant"
@@ -44,6 +45,10 @@ func SetGeoUpdateInterval(newGeoUpdateInterval int) {
 }
 
 func UpdateMMDB() (err error) {
+	sendGeoUpdateStatus("MMDB", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("MMDB", false, skipped, err) }()
+
 	vehicle := resource.NewHTTPVehicle(geodata.MmdbUrl(), C.Path.MMDB(), "", nil, defaultHttpTimeout, 0)
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
@@ -54,6 +59,7 @@ func UpdateMMDB() (err error) {
 		return fmt.Errorf("can't download MMDB database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
 		return nil
 	}
 	if len(data) == 0 {
@@ -75,6 +81,10 @@ func UpdateMMDB() (err error) {
 }
 
 func UpdateASN() (err error) {
+	sendGeoUpdateStatus("ASN", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("ASN", false, skipped, err) }()
+
 	vehicle := resource.NewHTTPVehicle(geodata.ASNUrl(), C.Path.ASN(), "", nil, defaultHttpTimeout, 0)
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
@@ -85,6 +95,7 @@ func UpdateASN() (err error) {
 		return fmt.Errorf("can't download ASN database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
 		return nil
 	}
 	if len(data) == 0 {
@@ -106,6 +117,12 @@ func UpdateASN() (err error) {
 }
 
 func UpdateGeoIp() (err error) {
+	sendGeoUpdateStatus("GEOIP", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("GEOIP", false, skipped, err) }()
+
+	geoLoader, err := geodata.GetGeoDataLoader("standard")
+
 	vehicle := resource.NewHTTPVehicle(geodata.GeoIpUrl(), C.Path.GeoIP(), "", nil, defaultHttpTimeout, 0)
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
@@ -116,14 +133,15 @@ func UpdateGeoIp() (err error) {
 		return fmt.Errorf("can't download GeoIP database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
 		return nil
 	}
 	if len(data) == 0 {
 		return fmt.Errorf("can't download GeoIP database file: no data")
 	}
 
-	if err = geodata.VerifyGeodataBytes(data); err != nil {
-		return fmt.Errorf("invalid GeoIP database file: %w", err)
+	if _, err = geoLoader.LoadIPByBytes(data, "cn"); err != nil {
+		return fmt.Errorf("invalid GeoIP database file: %s", err)
 	}
 
 	defer geodata.ClearGeoIPCache()
@@ -134,6 +152,12 @@ func UpdateGeoIp() (err error) {
 }
 
 func UpdateGeoSite() (err error) {
+	sendGeoUpdateStatus("GEOSITE", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("GEOSITE", false, skipped, err) }()
+
+	geoLoader, err := geodata.GetGeoDataLoader("standard")
+
 	vehicle := resource.NewHTTPVehicle(geodata.GeoSiteUrl(), C.Path.GeoSite(), "", nil, defaultHttpTimeout, 0)
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
@@ -144,14 +168,15 @@ func UpdateGeoSite() (err error) {
 		return fmt.Errorf("can't download GeoSite database file: %w", err)
 	}
 	if oldHash.Equal(hash) { // same hash, ignored
+		skipped = true
 		return nil
 	}
 	if len(data) == 0 {
 		return fmt.Errorf("can't download GeoSite database file: no data")
 	}
 
-	if err = geodata.VerifyGeodataBytes(data); err != nil {
-		return fmt.Errorf("invalid GeoSite database file: %w", err)
+	if _, err = geoLoader.LoadSiteByBytes(data, "cn"); err != nil {
+		return fmt.Errorf("invalid GeoSite database file: %s", err)
 	}
 
 	defer geodata.ClearGeoSiteCache()
@@ -227,8 +252,12 @@ func getUpdateTime() (time time.Time, err error) {
 }
 
 func RegisterGeoUpdater() {
+	registerGeoUpdater(context.Background())
+}
+
+func registerGeoUpdater(ctx context.Context) {
 	if updateInterval <= 0 {
-		log.Errorln("[GEO] Invalid update interval: %d", updateInterval)
+		log.Infoln("[GEO] Invalid update interval: %d", updateInterval)
 		return
 	}
 
@@ -238,7 +267,7 @@ func RegisterGeoUpdater() {
 
 		lastUpdate, err := getUpdateTime()
 		if err != nil {
-			log.Errorln("[GEO] Get GEO database update time error: %s", err.Error())
+			log.Infoln("[GEO] Get GEO database update time error: %s", err.Error())
 			return
 		}
 
@@ -246,15 +275,21 @@ func RegisterGeoUpdater() {
 		if lastUpdate.Add(time.Duration(updateInterval) * time.Hour).Before(time.Now()) {
 			log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(updateInterval)*time.Hour)
 			if err := UpdateGeoDatabases(); err != nil {
-				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+				log.Infoln("[GEO] Failed to update GEO database: %s", err.Error())
 				return
 			}
 		}
 
-		for range ticker.C {
-			log.Infoln("[GEO] updating database every %d hours", updateInterval)
-			if err := UpdateGeoDatabases(); err != nil {
-				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+		for {
+			select {
+			case <-ctx.Done():
+				log.Infoln("[GEO] Geo updater stopped")
+				return
+			case <-ticker.C:
+				log.Infoln("[GEO] updating database every %d hours", updateInterval)
+				if err := UpdateGeoDatabases(); err != nil {
+					log.Infoln("[GEO] Failed to update GEO database: %s", err.Error())
+				}
 			}
 		}
 	}()
