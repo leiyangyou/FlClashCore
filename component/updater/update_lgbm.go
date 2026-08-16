@@ -33,7 +33,6 @@ func LgbmUpdateInterval() int {
 	return lgbmUpdateInterval
 }
 
-
 func SetLgbmAutoUpdate(newAutoUpdate bool) {
 	lgbmAutoUpdate = newAutoUpdate
 }
@@ -42,8 +41,11 @@ func SetLgbmUpdateInterval(newUpdateInterval int) {
 	lgbmUpdateInterval = newUpdateInterval
 }
 
-
 func UpdateLgbmModel() (err error) {
+	sendGeoUpdateStatus("MODEL", true, false, nil)
+	var skipped bool
+	defer func() { sendGeoUpdateStatus("MODEL", false, skipped, err) }()
+
 	modelUrl := lightgbm.LgbmUrl()
 	if modelUrl == "" {
 		modelUrl = lightgbm.GetModelDownloadURL()
@@ -59,6 +61,7 @@ func UpdateLgbmModel() (err error) {
 		return fmt.Errorf("can't download LightGBM model file: %w", err)
 	}
 	if oldHash.Equal(hash) {
+		skipped = true
 		log.Infoln("[Smart] LightGBM model is up to date")
 		return nil
 	}
