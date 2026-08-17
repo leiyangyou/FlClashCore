@@ -19,7 +19,6 @@ import (
 	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
-
 	"github.com/vernesong/leaves"
 )
 
@@ -454,7 +453,9 @@ func GetModel() *WeightModel {
 
 				log.Infoln("[Smart] Model.bin downloaded and loaded successfully")
 			} else {
-				log.Infoln("[Smart] Model file loaded successfully")
+				log.Infoln("[Smart] Model file loaded successfully: features=%d, featureOrder=%d, transforms=%v, compatible=%v",
+					m.model.NFeatures(), len(m.transforms.FeatureOrder), m.transforms.TransformsEnabled,
+					m.transforms.IsCompatible())
 			}
 		} else {
 			log.Infoln("[Smart] Can't find Model.bin, start download")
@@ -577,6 +578,7 @@ func (m *WeightModel) PredictWeight(input *smart.ModelInput, priorityFactor floa
 
 	total := input.Success + input.Failure
 	if total < smart.DefaultMinSampleCount {
+		log.Debugln("[Smart] LightGBM skipped: samples=%d < %d, using Traditional", total, smart.DefaultMinSampleCount)
 		return 0, false
 	}
 
@@ -586,15 +588,23 @@ func (m *WeightModel) PredictWeight(input *smart.ModelInput, priorityFactor floa
 	m.mutex.RUnlock()
 
 	if model == nil {
+		log.Debugln("[Smart] LightGBM skipped: model is nil, using Traditional")
 		return smart.CalculateWeight(input, priorityFactor)
 	}
 
 	features := prepareFeatures(input)
 	if len(features) == 0 {
+		log.Warnln("[Smart] LightGBM skipped: empty features, using Traditional")
+		return smart.CalculateWeight(input, priorityFactor)
+	}
+
+	if model.NFeatures() != MaxFeatureSize {
+		log.Warnln("[Smart] LightGBM skipped: model features=%d, expected=%d, using Traditional", model.NFeatures(), MaxFeatureSize)
 		return smart.CalculateWeight(input, priorityFactor)
 	}
 
 	if transforms != nil && !transforms.IsCompatible() {
+		log.Warnln("[Smart] LightGBM skipped: feature order incompatible, using Traditional")
 		return smart.CalculateWeight(input, priorityFactor)
 	}
 
@@ -614,6 +624,7 @@ func (m *WeightModel) PredictWeight(input *smart.ModelInput, priorityFactor floa
 	prediction = model.PredictSingle(features, 0)
 
 	if math.IsNaN(prediction) || prediction <= 0 {
+		log.Debugln("[Smart] LightGBM prediction invalid: %v, using Traditional", prediction)
 		return smart.CalculateWeight(input, priorityFactor)
 	}
 
