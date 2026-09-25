@@ -69,21 +69,8 @@ func UpdateLgbmModel() (err error) {
 		return fmt.Errorf("can't download LightGBM model file: no data")
 	}
 
-	tmpFile, err := os.CreateTemp("", "lgbm_model_*.bin")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file for validation: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpPath)
-
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-
-	_, err = leaves.LGEnsembleFromFile(tmpPath, false)
-	if err != nil {
-		return fmt.Errorf("invalid LightGBM model file: %s", err)
+	if err := validateLgbmModel(data); err != nil {
+		return err
 	}
 
 	if err = vehicle.Write(data); err != nil {
@@ -162,4 +149,23 @@ func RegisterLgbmUpdater() {
 			}
 		}
 	}()
+}
+
+func validateLgbmModel(data []byte) error {
+	tmpFile, err := os.CreateTemp(C.Path.HomeDir(), "lgbm_model_*.bin")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for validation: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	tmpFile.Close()
+	defer os.Remove(tmpPath)
+
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp file: %w", err)
+	}
+
+	if _, err := leaves.LGEnsembleFromFile(tmpPath, false); err != nil {
+		return fmt.Errorf("invalid LightGBM model file: %s", err)
+	}
+	return nil
 }
